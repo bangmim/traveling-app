@@ -1,0 +1,151 @@
+const {Comment, FavoriteComment} = require("../models/model");
+
+// 댓글 작성
+exports.create = async(req, res, next)=>{
+    try{
+        const loginUser = req.user;
+        const id = req.params.id;
+        // 댓글 내용을 content에 담는다
+        const content = req.body.content;
+
+        // 데이터베이스 쿼리
+        const comment = new Comment({
+            article : id,
+            content: content,
+            user: loginUser._id
+        })
+
+        await comment.save();
+
+        res.json(await comment.populate("user"));
+
+    }catch(error){
+        next(error)
+    }
+}
+
+// 댓글 목록
+exports.comment_list = async (req, res, next)=>{
+    try{
+        const loginUser = req.user;
+        const id = req.params.id;
+        
+        // 쿼리
+        const comments = await Comment
+        .find({article : id})
+        .populate("user")
+        .sort([["created","descending"]])
+        .limit(req.query.limit)
+        .skip(req.query.skip)
+        .lean();
+
+        // comment 데이터에 isFavorite 속성을 추가한다
+        for(let comment of comments){   // 한 게시물에 comment가 여러개일 수 있으므로 for 반복문 사용
+            const favoriteComment = await FavoriteComment
+            .findOne({user: loginUser._id, comment: comment._id});
+
+            comment.isFavorite = favoriteComment ? true : false;
+        }
+
+        res.json(comments);
+
+    }catch (error){
+        next(error)
+    }
+}
+
+// 댓글 삭제
+exports.delete = async(req, res, next)=>{
+    try{
+        const loginUser = req.user;
+        const id = req.params.id;
+
+        // 쿼리
+        const comment = await Comment.findById(id);
+
+        // 삭제를 요청한 유저와 댓글 작성자가 일치하지 않을 경우
+        if(loginUser._id.toString() !== comment.user.toString()){
+            const err = new Error("User not match")
+            // 400(Bad Request) 잘못된 요청
+            err.status = 400;
+            return next(err);
+        }
+
+        // 쿼리
+        await comment.delete();
+
+        res.end();
+
+    }catch(error){
+        next(error)
+    }
+}
+
+// 댓글 좋아요
+exports.favorite = async (req, res, next)=>{
+    try{
+        const loginUser = req.user;
+        const id = req.params.id;
+
+        // 쿼리
+        const comment= await Comment.findByIdAndUpdate(id);
+        const favoriteComment = await FavoriteComment
+        .findOne({user: loginUser._id, comment : comment._id});
+
+        // 이미 좋아요 한 게시물인 경우
+        if(favoriteComment){
+            const err = new Error("Already favorite comment");
+            err.status = 400;
+            return next(err)
+        }
+
+        // 새로운 favoriteComment 데이터를 저장한다 
+        // 새로운 데이터를 저장할 때 >> 모델의 인스턴스를 만들고 save()메서드를 사용한다
+        const newFavoriteComment = new FavoriteComment({
+            user: loginUser._id,
+            comment: comment._id
+        })
+        await newFavoriteComment.save();
+
+        // 댓글의 좋아요 수를 1 증가시킨다
+        comment.favoriteCount ++;
+        await comment.save();
+
+        res.end();
+
+    }catch(error){
+        next(error)
+    }
+}
+
+// 좋아요 취소
+exports.unfavorite = async (req, res, next)=>{
+    try{
+        const loginUser = req.user;
+        const id = req.params.id;
+
+        // 쿼리
+        const comment = await Comment.findById(id);
+        const favoriteComment = await FavoriteComment
+        .findOne({user : loginUser._id, comment: comment._id});
+
+        // 좋아요한 게시물이 아닌 경우
+        if(!favoriteComment){
+            const err = new Error("No comment to unfavorite");
+            err.status = 400;
+            return next(err)
+        }
+
+        // favoriteComment 데이터를 삭제한다
+        await favoriteComment.delete();
+
+        // 댓글의 좋아요 수를 1 감소시킨다
+        comment.favoriteCount --;
+        await comment.save();
+
+        res.end();
+
+    }catch(error){
+        next(error)
+    }
+}
